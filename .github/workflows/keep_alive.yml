@@ -1,0 +1,23 @@
+name: 24/7 Cloud AI Keep-Alive Ping
+
+on:
+  schedule:
+    # Trigger every 14 minutes to prevent Render 15-minute sleep
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allow manual trigger anytime
+
+jobs:
+  ping:
+    name: Ping Cloud Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Heartbeat Ping to Render AI Backend
+        run: |
+          echo "Pinging https://live-object-detection-ai.onrender.com/health..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 "https://live-object-detection-ai.onrender.com/health")
+          echo "HTTP Status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "Render AI Backend is Online & Awake!"
+          else
+            echo "Ping received status: $HTTP_STATUS (Instance waking up)"
+          fi

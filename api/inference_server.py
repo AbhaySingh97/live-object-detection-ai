@@ -35,10 +35,41 @@ detector = YOLODetector(weights_path=MODEL_PATH, conf_threshold=0.35)
 camera_stream: Optional[CameraStream] = None
 
 
-class Base64Payload(BaseModel):
-    image: str
-    conf: Optional[float] = 0.35
-    classes: Optional[List[str]] = None
+import threading
+import urllib.request
+import logging
+
+logger = logging.getLogger("uvicorn")
+
+
+def keep_awake_daemon():
+    """Background heartbeat daemon to keep Render service awake 24/7.
+    Render free tier sleeps after 15 minutes of inactivity.
+    This worker pings the public endpoint every 10 minutes (600s).
+    """
+    time.sleep(60)  # Wait for initial boot
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://live-object-detection-ai.onrender.com")
+    ping_url = f"{render_url.rstrip('/')}/health"
+    logger.info(f"[Keep-Awake] Heartbeat worker active. Target: {ping_url}")
+
+    while True:
+        try:
+            time.sleep(600)  # Ping every 10 minutes
+            req = urllib.request.Request(
+                ping_url,
+                headers={"User-Agent": "Render-KeepAlive-Worker/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                if resp.status == 200:
+                    logger.info(f"[Keep-Awake] Self-ping successful: {ping_url}")
+        except Exception as err:
+            logger.warning(f"[Keep-Awake] Ping exception (will retry in 10m): {err}")
+
+
+@app.on_event("startup")
+def on_startup():
+    t = threading.Thread(target=keep_awake_daemon, daemon=True, name="KeepAwakeWorker")
+    t.start()
 
 
 # In-memory events database
