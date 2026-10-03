@@ -2,33 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
   Camera, Upload, Activity, Sliders, Shield, RefreshCw, 
-  Trash2, CheckCircle, Layers, Server, Cpu, Link, Settings
+  Trash2, CheckCircle, Layers, Cpu
 } from 'lucide-react';
 
-// Cloudflare Public HTTPS Tunnel for port 5000 (Express + AI microservice proxy)
-const CLOUDFLARE_URL = 'https://lifestyle-role-collection-artists.trycloudflare.com/api';
-
-const getDefaultApi = () => {
-  if (typeof window !== 'undefined') {
-    const saved = localStorage.getItem('object_vision_api_url');
-    // Discard old dead localtunnel URLs
-    if (saved && !saved.includes('loca.lt')) {
-      return saved;
-    }
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return 'http://localhost:5000/api';
-    }
-  }
-  return CLOUDFLARE_URL;
-};
+// Production Cloud AI Backend on Render
+const CLOUD_API_URL = 'https://live-object-detection-ai.onrender.com/api';
 
 export default function App() {
-  const [apiUrl, setApiUrl] = useState(getDefaultApi);
-  const [showApiSettings, setShowApiSettings] = useState(false);
-  const [tempApiUrl, setTempApiUrl] = useState(apiUrl);
-
-  const [activeTab, setActiveTab] = useState('image'); // 'webcam', 'image', 'events'
-  const [systemStatus, setSystemStatus] = useState({ backend: 'checking', ai: 'checking', model: 'Loading...' });
+  const [activeTab, setActiveTab] = useState('image'); // 'image', 'webcam', 'events'
+  const [systemStatus, setSystemStatus] = useState({ state: 'checking', message: 'Connecting to Cloud AI Engine...' });
   const [availableClasses, setAvailableClasses] = useState([]);
   const [selectedClasses, setSelectedClasses] = useState([]);
   const [confidence, setConfidence] = useState(0.35);
@@ -47,8 +29,12 @@ export default function App() {
   const [webcamActive, setWebcamActive] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 1. Fetch system health and classes on mount or API URL change
+  // 1. Polling System Health & Analytics
   useEffect(() => {
+    // Clear legacy test URLs from localStorage if present
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('object_vision_api_url');
+    }
     checkHealth();
     fetchEvents();
     fetchStats();
@@ -56,67 +42,39 @@ export default function App() {
       checkHealth();
       fetchEvents();
       fetchStats();
-    }, 4000);
+    }, 5000);
     return () => clearInterval(interval);
-  }, [apiUrl]);
+  }, []);
 
-  const checkHealth = async (target = apiUrl) => {
+  const checkHealth = async () => {
     try {
-      const res = await axios.get(`${target}/health`, { 
-        timeout: 4000
-      });
-      setSystemStatus({
-        backend: 'connected',
-        ai: res.data.ai_service,
-        model: res.data.model_details?.model_path || 'models/best.pt',
-        classesCount: res.data.model_details?.classes_count || 20
-      });
-      if (res.data.model_details?.classes && availableClasses.length === 0) {
-        setAvailableClasses(res.data.model_details.classes);
-      }
-      if (target !== apiUrl) {
-        setApiUrl(target);
-        localStorage.setItem('object_vision_api_url', target);
+      const res = await axios.get(`${CLOUD_API_URL}/health`, { timeout: 8000 });
+      if (res.data) {
+        setSystemStatus({
+          state: 'online',
+          message: 'Cloud AI Online',
+          model: res.data.model_details?.model_path || 'models/best.pt',
+          classesCount: res.data.model_details?.classes_count || 20
+        });
+        if (res.data.model_details?.classes && availableClasses.length === 0) {
+          setAvailableClasses(res.data.model_details.classes);
+        }
       }
     } catch (err) {
-      // If primary target fails and we are not already on Cloudflare tunnel, try auto-connecting to tunnel
-      if (target !== CLOUDFLARE_URL) {
-        try {
-          const cfRes = await axios.get(`${CLOUDFLARE_URL}/health`, { timeout: 4000 });
-          if (cfRes.data && cfRes.data.server) {
-            setSystemStatus({
-              backend: 'connected',
-              ai: cfRes.data.ai_service,
-              model: cfRes.data.model_details?.model_path || 'models/best.pt',
-              classesCount: cfRes.data.model_details?.classes_count || 20
-            });
-            if (cfRes.data.model_details?.classes && availableClasses.length === 0) {
-              setAvailableClasses(cfRes.data.model_details.classes);
-            }
-            setApiUrl(CLOUDFLARE_URL);
-            localStorage.setItem('object_vision_api_url', CLOUDFLARE_URL);
-            return;
-          }
-        } catch (e2) {}
-      }
-      setSystemStatus({ backend: 'disconnected', ai: 'disconnected', model: 'Offline' });
+      setSystemStatus({ state: 'waking', message: 'Waking up Cloud AI Engine (Render free tier cold-boot ~30s)...' });
     }
   };
 
   const fetchEvents = async () => {
     try {
-      const res = await axios.get(`${apiUrl}/events`, {
-        timeout: 4000
-      });
+      const res = await axios.get(`${CLOUD_API_URL}/events`, { timeout: 5000 });
       setEvents(res.data.events || []);
     } catch (err) {}
   };
 
   const fetchStats = async () => {
     try {
-      const res = await axios.get(`${apiUrl}/stats`, {
-        headers: { 'Bypass-Tunnel-Reminder': 'true' }
-      });
+      const res = await axios.get(`${CLOUD_API_URL}/stats`, { timeout: 5000 });
       setStats({
         total_inferences: res.data.total_inferences || 0,
         total_objects: res.data.total_objects_detected || 0,
@@ -141,6 +99,7 @@ export default function App() {
 
     setIsDetecting(true);
     const formData = new FormData();
+    formData.append('file', selectedImage);
     formData.append('image', selectedImage);
     formData.append('conf', confidence);
     if (selectedClasses.length > 0) {
@@ -148,34 +107,23 @@ export default function App() {
     }
 
     try {
-      const res = await axios.post(`${apiUrl}/detect`, formData, {
+      const res = await axios.post(`${CLOUD_API_URL}/detect`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
-          'Bypass-Tunnel-Reminder': 'true'
-        }
+        },
+        timeout: 45000
       });
       setDetectionResult(res.data);
       fetchEvents();
       fetchStats();
     } catch (err) {
-      alert(`Detection failed. Please verify API is running at: ${apiUrl}`);
+      alert('Detection failed. The cloud server may be waking up from cold boot. Please retry in a few seconds.');
     } finally {
       setIsDetecting(false);
     }
   };
 
-  // 4. Save API URL
-  const handleSaveApiUrl = () => {
-    let clean = tempApiUrl.trim().replace(/\/+$/, '');
-    if (!clean.endsWith('/api') && !clean.includes('/api/')) {
-      clean += '/api';
-    }
-    setApiUrl(clean);
-    localStorage.setItem('object_vision_api_url', clean);
-    setShowApiSettings(false);
-  };
-
-  // 5. Toggle class filter
+  // 4. Toggle class filter
   const toggleClass = (cls) => {
     if (selectedClasses.includes(cls)) {
       setSelectedClasses(selectedClasses.filter(c => c !== cls));
@@ -184,75 +132,69 @@ export default function App() {
     }
   };
 
-  // 6. Clear events
+  // 5. Clear events
   const handleClearEvents = async () => {
-    await axios.delete(`${apiUrl}/events`, {
-      headers: { 'Bypass-Tunnel-Reminder': 'true' }
-    });
-    fetchEvents();
-    fetchStats();
+    try {
+      await axios.delete(`${CLOUD_API_URL}/events`);
+      fetchEvents();
+      fetchStats();
+    } catch (err) {}
   };
 
-  const aiFeedUrl = `${apiUrl}/video_feed`;
+  const aiFeedUrl = `${CLOUD_API_URL}/video_feed`;
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto', padding: '24px' }}>
       {/* Top Navbar */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', width: '38px', height: '38px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Shield size={22} color="#fff" />
             </div>
             <div>
-              <h1 style={{ fontSize: '1.4rem', fontWeight: '700', letterSpacing: '-0.02em' }}>ObjectVision <span style={{ color: 'var(--accent-emerald)', fontSize: '0.9rem', fontWeight: '500' }}>MERN AI Suite</span></h1>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>React + Express + Node.js + YOLOv11 Deep Learning Pipeline</p>
+              <h1 style={{ fontSize: '1.45rem', fontWeight: '700', letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                ObjectVision <span style={{ color: 'var(--accent-emerald)', fontSize: '0.9rem', fontWeight: '600' }}>AI</span>
+              </h1>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>Production Real-Time Object Detection & Visual Analytics</p>
             </div>
           </div>
         </div>
 
-        {/* System Badges & API Settings */}
+        {/* Clean System Badges */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <div className={`badge ${systemStatus.backend === 'connected' ? 'badge-success' : 'badge-warning'}`}>
-            <Server size={14} /> Express API: {systemStatus.backend}
-          </div>
-          <div className={`badge ${systemStatus.ai === 'online' || systemStatus.ai === 'connected' ? 'badge-success' : 'badge-warning'}`}>
-            <Cpu size={14} /> AI Engine: {systemStatus.ai}
+          <div className={`badge ${systemStatus.state === 'online' ? 'badge-success' : 'badge-warning'}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ 
+              width: '8px', 
+              height: '8px', 
+              borderRadius: '50%', 
+              background: systemStatus.state === 'online' ? '#10b981' : '#f59e0b',
+              boxShadow: systemStatus.state === 'online' ? '0 0 8px #10b981' : 'none'
+            }} />
+            {systemStatus.message}
           </div>
           <div className="badge badge-primary">
-            <Layers size={14} /> Model: {systemStatus.model}
+            <Layers size={14} /> Fine-Tuned YOLOv11 (20 Classes)
           </div>
-          <button 
-            onClick={() => setShowApiSettings(!showApiSettings)}
-            title="Configure Backend API URL"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}
-          >
-            <Settings size={14} /> API Settings
-          </button>
         </div>
       </header>
 
-      {/* API Endpoint Configuration Modal/Banner */}
-      {showApiSettings && (
-        <div className="card" style={{ marginBottom: '20px', background: 'var(--bg-secondary)', borderColor: 'var(--accent-emerald)' }}>
-          <h4 style={{ fontSize: '0.9rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-emerald)' }}>
-            <Link size={16} /> Backend API Endpoint Configuration
-          </h4>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-            Current API URL: <code>{apiUrl}</code>
-          </p>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <input 
-              type="text" 
-              value={tempApiUrl} 
-              onChange={(e) => setTempApiUrl(e.target.value)}
-              placeholder="e.g. https://...trycloudflare.com/api or http://localhost:5000/api"
-              style={{ flex: 1, padding: '8px 12px', borderRadius: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border)', color: '#fff', fontSize: '0.85rem' }}
-            />
-            <button onClick={handleSaveApiUrl} className="btn btn-primary" style={{ padding: '8px 16px' }}>Save & Connect</button>
-            <button onClick={() => { setTempApiUrl('http://localhost:5000/api'); }} className="btn btn-secondary" style={{ padding: '8px 12px' }}>Use Localhost</button>
-            <button onClick={() => { setTempApiUrl(CLOUDFLARE_URL); }} className="btn btn-secondary" style={{ padding: '8px 12px' }}>Use Cloud Tunnel</button>
-          </div>
+      {/* Cloud Wake-Up Banner if Cold Booting */}
+      {systemStatus.state === 'waking' && (
+        <div style={{ 
+          background: 'rgba(245, 158, 11, 0.1)', 
+          border: '1px solid rgba(245, 158, 11, 0.3)', 
+          borderRadius: '8px', 
+          padding: '12px 16px', 
+          marginBottom: '20px', 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '12px',
+          color: '#fbbf24',
+          fontSize: '0.85rem'
+        }}>
+          <RefreshCw className="animate-spin" size={16} />
+          <span>Cloud instance is spinning up on Render. Requests will complete automatically once ready.</span>
         </div>
       )}
 
@@ -265,7 +207,7 @@ export default function App() {
           {/* Quick Metrics */}
           <div className="card">
             <h3 style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Activity size={16} color="var(--accent-emerald)" /> Real-Time Telemetry
+              <Activity size={16} color="var(--accent-emerald)" /> Live Telemetry
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div style={{ background: 'var(--bg-secondary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)' }}>
@@ -310,7 +252,7 @@ export default function App() {
                   <button onClick={() => setSelectedClasses([])} style={{ background: 'none', border: 'none', color: 'var(--accent-red)', fontSize: '0.75rem', cursor: 'pointer' }}>Reset</button>
                 )}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '200px', overflowY: 'auto', paddingRight: '4px' }}>
                 {availableClasses.map((cls) => {
                   const active = selectedClasses.includes(cls);
                   return (
@@ -337,17 +279,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Desktop App Notice */}
-          <div className="card" style={{ background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.2)' }}>
-            <h4 style={{ fontSize: '0.85rem', color: '#60a5fa', marginBottom: '8px' }}>💡 Desktop Live Stream</h4>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              For high-FPS video streaming with line crossing and dwell-time alerts:
-            </p>
-            <code style={{ display: 'block', background: 'var(--bg-primary)', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', marginTop: '8px', color: '#38bdf8' }}>
-              python app/main.py --model models/best.pt
-            </code>
-          </div>
-
         </aside>
 
         {/* RIGHT COLUMN: Interactive Workspaces */}
@@ -371,7 +302,7 @@ export default function App() {
               onClick={() => setActiveTab('events')}
               className={`btn ${activeTab === 'events' ? 'btn-primary' : 'btn-secondary'}`}
             >
-              <Activity size={16} /> Event Log & History ({events.length})
+              <Activity size={16} /> Event History ({events.length})
             </button>
           </div>
 
@@ -421,7 +352,7 @@ export default function App() {
                   ) : (
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                       <Upload size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-                      <p>Select or drag an image to begin</p>
+                      <p>Select an image to analyze</p>
                     </div>
                   )}
                 </div>
@@ -497,7 +428,7 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
                   <h3 style={{ fontSize: '1.1rem', fontWeight: '600' }}>Live AI Camera Stream</h3>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Real-time MJPEG feed with 20-class YOLO inference directly inside React</p>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Real-time camera feed with YOLO deep learning inference</p>
                 </div>
                 <button 
                   onClick={() => setWebcamActive(!webcamActive)} 
@@ -513,7 +444,7 @@ export default function App() {
                     src={aiFeedUrl} 
                     alt="Live YOLO Stream" 
                     style={{ width: '100%', maxWidth: '960px', height: 'auto', display: 'block' }} 
-                    onError={() => alert('Could not connect to webcam stream. Ensure camera is plugged in.')}
+                    onError={() => alert('Could not connect to webcam stream. Ensure camera permissions are granted.')}
                   />
                 </div>
               ) : (
@@ -521,7 +452,7 @@ export default function App() {
                   <Camera size={48} style={{ opacity: 0.3, margin: '0 auto 16px' }} />
                   <h4>Stream is Currently Inactive</h4>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '6px' }}>
-                    Click "Start Live Stream" to activate your connected webcam with real-time detection boxes.
+                    Click "Start Live Stream" to activate your connected camera with real-time detection boxes.
                   </p>
                 </div>
               )}
@@ -533,8 +464,8 @@ export default function App() {
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                  <h3 style={{ fontSize: '1rem', fontWeight: '600' }}>Event & Alert Log</h3>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Stored in Express database for security auditing & tracking</p>
+                  <h3 style={{ fontSize: '1rem', fontWeight: '600' }}>Event & Alert History</h3>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Audit log of detected objects and inference metrics</p>
                 </div>
                 <button onClick={handleClearEvents} className="btn btn-secondary" style={{ color: 'var(--accent-red)' }}>
                   <Trash2 size={14} /> Clear History

@@ -86,13 +86,15 @@ def get_classes():
 @app.post("/api/detect")
 async def detect_image(
     file: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),
     conf: float = Form(0.35),
     classes: Optional[str] = Form(None),
 ):
-    if file is None:
+    target_file = file or image
+    if target_file is None:
         return JSONResponse(status_code=400, content={"error": "No image file provided"})
 
-    contents = await file.read()
+    contents = await target_file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -128,7 +130,7 @@ async def detect_image(
         "annotated_image": f"data:image/jpeg;base64,{b64_img}",
     }
 
-    event_id = record_event(result, file.filename or "image.jpg")
+    event_id = record_event(result, target_file.filename or "image.jpg")
     result["logged_event_id"] = event_id
     return result
 
