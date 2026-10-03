@@ -41,22 +41,49 @@ class Base64Payload(BaseModel):
     classes: Optional[List[str]] = None
 
 
+# In-memory events database
+events_db: List[dict] = []
+
+
+def record_event(data: dict, filename: str):
+    event = {
+        "id": int(time.time() * 1000),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "classes": [d["class_name"] for d in data.get("detections", [])],
+        "count": data.get("count", 0),
+        "latency_ms": data.get("latency_ms", 0),
+        "filename": filename,
+    }
+    events_db.insert(0, event)
+    if len(events_db) > 500:
+        events_db.pop()
+    return event["id"]
+
+
 @app.get("/health")
+@app.get("/api/health")
 def health_check():
     return {
-        "status": "online",
-        "model_path": MODEL_PATH,
-        "classes_count": len(detector.class_names),
-        "classes": list(detector.class_names.values()),
+        "server": "ObjectVision Cloud AI Backend",
+        "ai_service": "online",
+        "model_details": {
+            "status": "online",
+            "model_path": MODEL_PATH,
+            "classes_count": len(detector.class_names),
+            "classes": list(detector.class_names.values()),
+        },
+        "stored_events_count": len(events_db),
     }
 
 
 @app.get("/classes")
+@app.get("/api/classes")
 def get_classes():
     return {"classes": list(detector.class_names.values())}
 
 
 @app.post("/detect")
+@app.post("/api/detect")
 async def detect_image(
     file: Optional[UploadFile] = File(None),
     conf: float = Form(0.35),
@@ -93,12 +120,54 @@ async def detect_image(
         for d in detections
     ]
 
-    return {
+    result = {
         "success": True,
         "count": len(det_list),
         "latency_ms": round(latency_ms, 2),
         "detections": det_list,
         "annotated_image": f"data:image/jpeg;base64,{b64_img}",
+    }
+
+    event_id = record_event(result, file.filename or "image.jpg")
+    result["logged_event_id"] = event_id
+    return result
+
+
+@app.get("/events")
+@app.get("/api/events")
+def get_events():
+    return {"total": len(events_db), "events": events_db[:50]}
+
+
+@app.delete("/events")
+@app.delete("/api/events")
+def clear_events():
+    global events_db
+    events_db = []
+    return {"success": True, "message": "Event logs cleared"}
+
+
+@app.get("/stats")
+@app.get("/api/stats")
+def get_stats():
+    class_frequencies = {}
+    total_objects = 0
+    total_latency = 0.0
+
+    for e in events_db:
+        total_objects += e.get("count", 0)
+        total_latency += e.get("latency_ms", 0)
+        for c in e.get("classes", []):
+            class_frequencies[c] = class_frequencies.get(c, 0) + 1
+
+    count = len(events_db)
+    avg_latency = round(total_latency / count, 1) if count > 0 else 0
+
+    return {
+        "total_inferences": count,
+        "total_objects_detected": total_objects,
+        "avg_latency_ms": avg_latency,
+        "class_frequencies": class_frequencies,
     }
 
 
@@ -128,6 +197,7 @@ def generate_video_frames():
 
 
 @app.get("/video_feed")
+@app.get("/api/video_feed")
 def video_feed():
     """MJPEG stream endpoint for real-time video playback in HTML/React."""
     return StreamingResponse(
@@ -138,4 +208,5 @@ def video_feed():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
