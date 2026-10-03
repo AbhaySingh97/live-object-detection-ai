@@ -2,6 +2,10 @@
 
 An end-to-end, modular real-time object detection, tracking, and event monitoring system built using **Ultralytics YOLO** and **OpenCV**, designed according to the *OpenCV Object Detection Complete Build Roadmap*.
 
+- 🌐 **Live Web Application**: [https://live-object-detection-ai.vercel.app](https://live-object-detection-ai.vercel.app)
+- 🐙 **GitHub Repository**: [https://github.com/AbhaySingh97/live-object-detection-ai](https://github.com/AbhaySingh97/live-object-detection-ai)
+- ⚡ **Auto CI/CD**: Any push to the `main` branch automatically builds and deploys to Vercel.
+
 ---
 
 ## 🌐 Full-Stack MERN Architecture
