@@ -1,0 +1,29 @@
+# Node dependencies & builds
+node_modules/
+**/node_modules/
+client/dist/
+client/.vercel/
+
+# Python virtual environment & cache
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.log
+
+# Large local executables
+cloudflared.exe
+*.exe
+
+# Training runs & temporary dataset archives
+runs/
+data/dataset/VOCdevkit/
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

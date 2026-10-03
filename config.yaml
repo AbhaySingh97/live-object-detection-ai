@@ -1,0 +1,43 @@
+# Smart Object Detection System Configuration
+
+model:
+  weights_path: "models/best.pt"    # Custom fine-tuned model weights
+  device: null                      # "cuda", "cpu", or null for automatic detection
+  conf_threshold: 0.35
+  iou_threshold: 0.45
+  target_classes: null              # null for all 80 COCO classes, or list: ["person", "car", "bottle"]
+
+camera:
+  source: "0"                       # "0" for primary webcam, or path: "data/test/sample.mp4"
+  width: 1280
+  height: 720
+  fps: 30
+  buffer_size: 1
+
+tracking:
+  enabled: true
+  tracker_type: "bytetrack.yaml"    # "bytetrack.yaml" or "botsort.yaml"
+  track_history_length: 30
+  max_lost_frames: 30
+
+alerts:
+  line_crossing_enabled: true
+  line_points:
+    - [0.1, 0.5]                    # Start point (x, y) normalized (0-1)
+    - [0.9, 0.5]                    # End point (x, y) normalized (0-1)
+  zone_detection_enabled: false
+  zone_polygon:
+    - [0.2, 0.2]
+    - [0.8, 0.2]
+    - [0.8, 0.8]
+    - [0.2, 0.8]
+  dwell_time_threshold_sec: 5.0
+  log_file: "data/detections_log.csv"
+
+display:
+  window_name: "Smart Object Detection System (OpenCV + YOLO)"
+  draw_boxes: true
+  draw_trails: true
+  draw_lines: true
+  draw_zones: false
+  draw_hud: true

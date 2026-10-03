@@ -1,0 +1,20 @@
+# YOLO Dataset Configuration File
+# Reference: Section 10 of OpenCV Object Detection Complete Build Roadmap
+
+# Dataset root directory (relative to this file or absolute path)
+# In Kaggle notebook, set this to: /kaggle/input/<YOUR_DATASET_NAME>
+path: .
+
+# Image directory paths (relative to 'path')
+train: images/train
+val: images/val
+test: images/test
+
+# Classes definition
+# Modify according to your project's chosen classes (Phase 1)
+names:
+  0: person
+  1: bottle
+  2: laptop
+  3: backpack
+  4: chair
