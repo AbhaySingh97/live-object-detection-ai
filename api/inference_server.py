@@ -37,38 +37,38 @@ camera_stream: Optional[CameraStream] = None
 
 import threading
 import urllib.request
+import gc
 import logging
 
 logger = logging.getLogger("uvicorn")
 
 
-def keep_awake_daemon():
-    """Background heartbeat daemon to keep Render service awake 24/7.
-    Render free tier sleeps after 15 minutes of inactivity.
-    This worker pings the public endpoint every 10 minutes (600s).
-    """
-    time.sleep(60)  # Wait for initial boot
-    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://live-object-detection-ai.onrender.com")
-    ping_url = f"{render_url.rstrip('/')}/health"
-    logger.info(f"[Keep-Awake] Heartbeat worker active. Target: {ping_url}")
+def keep_alive_worker():
+    """Background worker that pings this service periodically to prevent Render free-tier sleep."""
+    time.sleep(25)
+    server_url = os.environ.get("RENDER_EXTERNAL_URL", "https://live-object-detection-ai.onrender.com")
+    if not server_url.startswith("http"):
+        server_url = f"https://{server_url}"
+    health_url = f"{server_url.rstrip('/')}/health"
 
+    logger.info(f"[KeepAlive] Starting self-ping background worker for: {health_url}")
     while True:
         try:
-            time.sleep(600)  # Ping every 10 minutes
             req = urllib.request.Request(
-                ping_url,
+                health_url,
                 headers={"User-Agent": "Render-KeepAlive-Worker/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=25) as resp:
-                if resp.status == 200:
-                    logger.info(f"[Keep-Awake] Self-ping successful: {ping_url}")
-        except Exception as err:
-            logger.warning(f"[Keep-Awake] Ping exception (will retry in 10m): {err}")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                logger.info(f"[KeepAlive] Self-ping successful! HTTP Status: {resp.status}")
+        except Exception as e:
+            logger.warning(f"[KeepAlive] Self-ping notification: {e}")
+        # Ping every 10 minutes (600s) to keep Render awake 24/7
+        time.sleep(600)
 
 
 @app.on_event("startup")
-def on_startup():
-    t = threading.Thread(target=keep_awake_daemon, daemon=True, name="KeepAwakeWorker")
+def start_keep_alive():
+    t = threading.Thread(target=keep_alive_worker, daemon=True)
     t.start()
 
 
@@ -115,7 +115,7 @@ def get_classes():
 
 @app.post("/detect")
 @app.post("/api/detect")
-async def detect_image(
+def detect_image(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
     conf: float = Form(0.35),
@@ -125,7 +125,7 @@ async def detect_image(
     if target_file is None:
         return JSONResponse(status_code=400, content={"error": "No image file provided"})
 
-    contents = await target_file.read()
+    contents = target_file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -170,6 +170,11 @@ async def detect_image(
 
     event_id = record_event(result, target_file.filename or "image.jpg")
     result["logged_event_id"] = event_id
+
+    # Explicit garbage collection to keep Render memory below 250MB
+    del frame, annotated, buffer, detections
+    gc.collect()
+
     return result
 
 

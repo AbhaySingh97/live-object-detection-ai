@@ -4,7 +4,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
+
+# Optimize PyTorch for low-CPU cloud containers (avoids OpenMP thread lockup on Render)
+torch.set_num_threads(1)
+if hasattr(torch, "set_num_interop_threads"):
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
 
 
 @dataclass
@@ -100,25 +109,28 @@ class YOLODetector:
         """
         start_t = time.perf_counter()
 
-        # Run inference or tracking
-        if track:
-            results = self.model.track(
-                source=frame,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                device=self.device,
-                tracker=tracker_type,
-                persist=True,
-                verbose=False,
-            )
-        else:
-            results = self.model.predict(
-                source=frame,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                device=self.device,
-                verbose=False,
-            )
+        # Run inference or tracking with zero autograd memory overhead
+        with torch.inference_mode():
+            if track:
+                results = self.model.track(
+                    source=frame,
+                    conf=self.conf_threshold,
+                    iou=self.iou_threshold,
+                    device=self.device,
+                    tracker=tracker_type,
+                    persist=True,
+                    verbose=False,
+                    imgsz=640,
+                )
+            else:
+                results = self.model.predict(
+                    source=frame,
+                    conf=self.conf_threshold,
+                    iou=self.iou_threshold,
+                    device=self.device,
+                    verbose=False,
+                    imgsz=640,
+                )
 
         self.last_inference_time_ms = (time.perf_counter() - start_t) * 1000.0
 

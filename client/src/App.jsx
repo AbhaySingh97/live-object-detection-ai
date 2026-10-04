@@ -11,42 +11,54 @@ const CLOUD_API_URL = 'https://live-object-detection-ai.onrender.com/api';
 // Automatically downscales large camera/phone images (e.g. 4000x3000) to max 1200px before uploading
 const compressImageForInference = (file) => {
   return new Promise((resolve) => {
-    if (file.size < 400 * 1024) {
+    // 2-second failsafe: if anything goes wrong, return original file without hanging
+    const timer = setTimeout(() => resolve(file), 2000);
+
+    if (!file || file.size < 400 * 1024) {
+      clearTimeout(timer);
       resolve(file);
       return;
     }
     const img = new Image();
     const reader = new FileReader();
+    reader.onerror = () => { clearTimeout(timer); resolve(file); };
+    img.onerror = () => { clearTimeout(timer); resolve(file); };
     reader.onload = (e) => {
       img.onload = () => {
-        const maxDim = 1200;
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' });
-              resolve(compressedFile);
+        try {
+          const maxDim = 1200;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
             } else {
-              resolve(file);
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
             }
-          },
-          'image/jpeg',
-          0.85
-        );
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(
+            (blob) => {
+              clearTimeout(timer);
+              if (blob) {
+                const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' });
+                resolve(compressedFile);
+              } else {
+                resolve(file);
+              }
+            },
+            'image/jpeg',
+            0.85
+          );
+        } catch (err) {
+          clearTimeout(timer);
+          resolve(file);
+        }
       };
       img.src = e.target.result;
     };
@@ -65,6 +77,7 @@ export default function App() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [isDetecting, setIsDetecting] = useState(false);
+  const isDetectingRef = useRef(false);
   const [detectionResult, setDetectionResult] = useState(null);
 
   // Events & Analytics state
@@ -90,6 +103,7 @@ export default function App() {
   }, []);
 
   const checkHealth = async () => {
+    if (isDetectingRef.current) return;
     try {
       const res = await axios.get(`${CLOUD_API_URL}/health`, { timeout: 20000 });
       if (res.data) {
@@ -104,7 +118,9 @@ export default function App() {
         }
       }
     } catch (err) {
-      setSystemStatus({ state: 'waking', message: 'Waking up Cloud AI Engine (Render free tier cold-boot ~30s)...' });
+      if (!isDetectingRef.current) {
+        setSystemStatus({ state: 'waking', message: 'Waking up Cloud AI Engine (Render free tier cold-boot ~30s)...' });
+      }
     }
   };
 
@@ -141,6 +157,7 @@ export default function App() {
     if (!selectedImage) return;
 
     setIsDetecting(true);
+    isDetectingRef.current = true;
     try {
       const optimizedImage = await compressImageForInference(selectedImage);
       const formData = new FormData();
@@ -155,15 +172,24 @@ export default function App() {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
-        timeout: 60000
+        timeout: 90000
       });
-      setDetectionResult(res.data);
+      if (res.data) {
+        setDetectionResult(res.data);
+        setSystemStatus({
+          state: 'online',
+          message: 'Cloud AI Online',
+          model: 'models/best.pt',
+          classesCount: 20
+        });
+      }
       fetchEvents();
       fetchStats();
     } catch (err) {
       alert('Detection failed. The cloud server may be waking up from cold boot. Please retry in a few seconds.');
     } finally {
       setIsDetecting(false);
+      isDetectingRef.current = false;
     }
   };
 
