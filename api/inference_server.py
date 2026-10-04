@@ -132,6 +132,13 @@ async def detect_image(
     if frame is None:
         return JSONResponse(status_code=400, content={"error": "Failed to decode image"})
 
+    # Memory-safe downscaling for phone/high-res photos (Render 512MB RAM optimization)
+    h, w = frame.shape[:2]
+    max_dim = 1024
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
     detector.conf_threshold = conf
     detector.target_classes = [c.strip() for c in classes.split(",")] if classes else None
 
@@ -140,7 +147,7 @@ async def detect_image(
     latency_ms = (time.perf_counter() - start_t) * 1000
 
     annotated = detector.annotate(frame, detections)
-    _, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    _, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
     b64_img = base64.b64encode(buffer).decode("utf-8")
 
     det_list = [

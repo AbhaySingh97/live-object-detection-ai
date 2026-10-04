@@ -8,6 +8,52 @@ import {
 // Production Cloud AI Backend on Render
 const CLOUD_API_URL = 'https://live-object-detection-ai.onrender.com/api';
 
+// Automatically downscales large camera/phone images (e.g. 4000x3000) to max 1200px before uploading
+const compressImageForInference = (file) => {
+  return new Promise((resolve) => {
+    if (file.size < 400 * 1024) {
+      resolve(file);
+      return;
+    }
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      img.onload = () => {
+        const maxDim = 1200;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' });
+              resolve(compressedFile);
+            } else {
+              resolve(file);
+            }
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('image'); // 'image', 'webcam', 'events'
   const [systemStatus, setSystemStatus] = useState({ state: 'checking', message: 'Connecting to Cloud AI Engine...' });
@@ -29,9 +75,8 @@ export default function App() {
   const [webcamActive, setWebcamActive] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 1. Polling System Health & Analytics
+  // 1. Polling System Health (gentle interval to avoid CPU thrashing)
   useEffect(() => {
-    // Clear legacy test URLs from localStorage if present
     if (typeof window !== 'undefined') {
       localStorage.removeItem('object_vision_api_url');
     }
@@ -40,15 +85,13 @@ export default function App() {
     fetchStats();
     const interval = setInterval(() => {
       checkHealth();
-      fetchEvents();
-      fetchStats();
-    }, 5000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
   const checkHealth = async () => {
     try {
-      const res = await axios.get(`${CLOUD_API_URL}/health`, { timeout: 8000 });
+      const res = await axios.get(`${CLOUD_API_URL}/health`, { timeout: 20000 });
       if (res.data) {
         setSystemStatus({
           state: 'online',
@@ -67,14 +110,14 @@ export default function App() {
 
   const fetchEvents = async () => {
     try {
-      const res = await axios.get(`${CLOUD_API_URL}/events`, { timeout: 5000 });
+      const res = await axios.get(`${CLOUD_API_URL}/events`, { timeout: 8000 });
       setEvents(res.data.events || []);
     } catch (err) {}
   };
 
   const fetchStats = async () => {
     try {
-      const res = await axios.get(`${CLOUD_API_URL}/stats`, { timeout: 5000 });
+      const res = await axios.get(`${CLOUD_API_URL}/stats`, { timeout: 8000 });
       setStats({
         total_inferences: res.data.total_inferences || 0,
         total_objects: res.data.total_objects_detected || 0,
@@ -98,20 +141,21 @@ export default function App() {
     if (!selectedImage) return;
 
     setIsDetecting(true);
-    const formData = new FormData();
-    formData.append('file', selectedImage);
-    formData.append('image', selectedImage);
-    formData.append('conf', confidence);
-    if (selectedClasses.length > 0) {
-      formData.append('classes', selectedClasses.join(','));
-    }
-
     try {
+      const optimizedImage = await compressImageForInference(selectedImage);
+      const formData = new FormData();
+      formData.append('file', optimizedImage);
+      formData.append('image', optimizedImage);
+      formData.append('conf', confidence);
+      if (selectedClasses.length > 0) {
+        formData.append('classes', selectedClasses.join(','));
+      }
+
       const res = await axios.post(`${CLOUD_API_URL}/detect`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
-        timeout: 45000
+        timeout: 60000
       });
       setDetectionResult(res.data);
       fetchEvents();
